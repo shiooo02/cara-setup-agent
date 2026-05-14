@@ -1,0 +1,29 @@
+# Hermes config — point ke 9Router sebagai single LLM provider.
+# 9Router yang bakal handle multi-provider routing & fallback.
+
+providers:
+  9router:
+    name: 9Router
+    base_url: http://localhost:20128/v1
+    key_env: OPENAI_API_KEY
+    default_model: free_smart_fallback
+    models:
+      free_smart_fallback: {}
+      # Model spesifik bisa dipanggil langsung pake prefix provider:
+      # contoh: openrouter/deepseek/deepseek-chat
+      #         groq/llama-3.3-70b-versatile
+      #         gemini/gemini-2.5-flash
+
+fallback_providers:
+  - provider: 9router
+    model: free_smart_fallback
+
+# Permissions — siapa yang boleh pake bot
+allowed_users:
+  - "${TELEGRAM_OWNER_ID}"
+
+# Tools yang aktif (bot bisa eksekusi)
+tools:
+  shell: true
+  file_edit: true
+  web_browse: true

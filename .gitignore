@@ -1,0 +1,17 @@
+# Local
+*.log
+*.swp
+.DS_Store
+
+# Backups
+*.bak
+*.backup
+*-backup-*.tar.gz
+
+# Editor
+.vscode/
+.idea/
+
+# Local overrides
+.env
+.env.local
