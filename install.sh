@@ -86,13 +86,13 @@ ${C_BOLD}LANGKAH SELANJUTNYA:${C_RESET}
   3) Tambah provider LLM (minimal 1, recommended 2+):
      ${C_BOLD}bash add-provider.sh${C_RESET}
 
-  4) Set Telegram bot token + 9router API key:
+  4) Set Telegram bot token + 9router API key + install gateway service:
      ${C_BOLD}bash configure-hermes.sh${C_RESET}
 
   5) Test bot di Telegram: kirim /start ke bot lo.
 
 ${C_BOLD}STATUS / LOG:${C_RESET}
-  systemctl status 9router hermes 9router-tunnel
-  journalctl -u hermes -f
+  systemctl status 9router 9router-tunnel hermes-gateway
+  journalctl -u hermes-gateway -f
 
 EOF

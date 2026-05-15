@@ -7,11 +7,17 @@ Requires=9router.service
 [Service]
 Type=simple
 User=root
-ExecStart=/usr/local/bin/cloudflared tunnel --url http://localhost:20128 --no-autoupdate
+# --protocol http2 = jangan pake QUIC/UDP (banyak VPS blokir UDP/7844 → restart loop)
+# --no-autoupdate  = jangan ngirim sinyal restart sendiri
+ExecStart=/usr/local/bin/cloudflared tunnel --url http://localhost:20128 \
+          --protocol http2 --no-autoupdate
 Restart=always
 RestartSec=10
-StandardOutput=append:/var/log/9router-tunnel.log
-StandardError=append:/var/log/9router-tunnel.log
+# Limit restart biar gak infinite loop kalau beneran broken
+StartLimitIntervalSec=300
+StartLimitBurst=10
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target

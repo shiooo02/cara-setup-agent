@@ -9,7 +9,7 @@ require_root
 
 step "Install cloudflared"
 if command -v cloudflared >/dev/null 2>&1; then
-  ok "cloudflared udah keinstall"
+  ok "cloudflared udah keinstall: $(cloudflared --version 2>&1 | head -1)"
 else
   arch=$(uname -m)
   case "$arch" in
@@ -24,13 +24,11 @@ else
   ok "cloudflared terinstall ($bin)"
 fi
 
-step "Pastikan /var/log/9router-tunnel.log ada"
-touch /var/log/9router-tunnel.log
-chmod 644 /var/log/9router-tunnel.log
-
 step "Install systemd service: 9router-tunnel"
 install -m 644 "$REPO_DIR/services/9router-tunnel.service" /etc/systemd/system/9router-tunnel.service
 systemctl daemon-reload
+# Reset failed state kalau service ini sebelumnya restart-loop
+systemctl reset-failed 9router-tunnel 2>/dev/null || true
 systemctl enable 9router-tunnel >/dev/null 2>&1
 systemctl restart 9router-tunnel
 
@@ -39,7 +37,10 @@ mkdir -p "$HERMES_DIR"
 TUNNEL_URL=""
 for i in {1..30}; do
   sleep 2
-  TUNNEL_URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' /var/log/9router-tunnel.log 2>/dev/null | tail -1 || true)
+  # Baca dari journalctl (lebih reliable daripada file log)
+  TUNNEL_URL=$(journalctl -u 9router-tunnel --since "2 min ago" --no-pager 2>/dev/null \
+    | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' \
+    | tail -1 || true)
   if [[ -n "$TUNNEL_URL" ]]; then
     break
   fi
@@ -51,5 +52,7 @@ if [[ -n "$TUNNEL_URL" ]]; then
   ok "Disimpan di: $HERMES_DIR/tunnel-url.txt"
 else
   warn "Tunnel URL belum kebentuk setelah 60 detik."
-  warn "Cek manual: tail -f /var/log/9router-tunnel.log"
+  warn "Cek: journalctl -u 9router-tunnel -n 30 --no-pager"
+  warn "Kalau service restart-loop, biasanya UDP port 7844 di-blokir VPS."
+  warn "Service ini udah pake --protocol http2 jadi mestinya OK, tapi cek log."
 fi

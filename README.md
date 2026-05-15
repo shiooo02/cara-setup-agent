@@ -120,9 +120,14 @@ Lo bakal di-prompt isi:
 - Telegram owner ID (user ID lo)
 - 9Router API key (dari dashboard 9router)
 
-Otomatis di-save ke `/root/.hermes/.env` + restart service.
+Otomatis di-save ke `/root/.hermes/.env`, terus jalanin `hermes gateway install`
+yang bikin systemd service `hermes-gateway` + start.
 
 Test: kirim `/start` ke bot lo di Telegram. Harus respond.
+
+> Catatan: Hermes Agent dari Nous Research itu **Python package**, bukan npm.
+> Installer resminya bikin perintah `hermes` global, dengan CLI buat manage
+> gateway service-nya sendiri (`hermes gateway install/start/stop`).
 
 ---
 
@@ -130,11 +135,12 @@ Test: kirim `/start` ke bot lo di Telegram. Harus respond.
 
 ```bash
 # Status semua service
-systemctl status 9router hermes 9router-tunnel
+systemctl status 9router hermes-gateway 9router-tunnel
 
 # Live log
 journalctl -u 9router -f
-journalctl -u hermes -f
+journalctl -u hermes-gateway -f
+journalctl -u 9router-tunnel -f
 
 # URL tunnel (kalau lupa)
 cat /root/.hermes/tunnel-url.txt
@@ -151,10 +157,12 @@ Lihat [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 Singkatnya:
 | Masalah | Quick fix |
 |---|---|
+| Install gagal di tengah / service ga ada / restart-loop | `sudo bash fix.sh` |
 | Dashboard ga keload | `systemctl restart 9router` |
-| Bot ga respond | `journalctl -u hermes -n 50` cek error |
+| Bot ga respond | `journalctl -u hermes-gateway -n 50` cek error |
 | API key kena reject | Test pake `bash test-provider.sh <prefix>` |
-| Tunnel URL ilang | `systemctl restart 9router-tunnel && sleep 5 && cat /root/.hermes/tunnel-url.txt` |
+| Tunnel URL ilang | `systemctl restart 9router-tunnel && sleep 8 && cat /root/.hermes/tunnel-url.txt` |
+| `9router-tunnel.service: status=9/KILL` (restart loop) | `sudo bash fix.sh` (pasang ulang pake `--protocol http2`) |
 
 ---
 
@@ -189,19 +197,19 @@ Bakal nanyain konfirmasi. Hapus service + file di `/root/.hermes` + `/root/.9rou
 cara-setup-agent/
 ├── README.md                  ← lo lagi baca ini
 ├── install.sh                 ← installer utama
+├── fix.sh                     ← repair install yang gagal di tengah jalan
 ├── add-provider.sh            ← tambah API key provider (interaktif)
-├── configure-hermes.sh        ← isi token Telegram + API key 9router
+├── configure-hermes.sh        ← isi token Telegram + API key 9router + install gateway
 ├── test-provider.sh           ← test provider tertentu
 ├── uninstall.sh
 ├── scripts/
 │   ├── lib.sh                 ← helper (logging, get cli token)
 │   ├── setup-9router.sh
-│   ├── setup-hermes.sh
-│   └── setup-tunnel.sh
+│   ├── setup-hermes.sh        ← pake installer resmi Nous Research (Python)
+│   └── setup-tunnel.sh        ← cloudflared --protocol http2 (anti restart-loop)
 ├── services/
 │   ├── 9router.service
-│   ├── hermes.service
-│   └── 9router-tunnel.service
+│   └── 9router-tunnel.service ← Hermes pake systemd unit-nya sendiri
 ├── templates/
 │   ├── hermes.env.template
 │   └── hermes-config.yaml.template

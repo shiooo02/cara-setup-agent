@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-# Install Hermes (Telegram bot) + setup systemd service.
+# Install Hermes Agent (Nous Research) — pakai installer resminya.
+# Hermes punya CLI sendiri (`hermes setup`, `hermes gateway install`)
+# yang otomatis handle systemd service. Jadi kita TIDAK bikin
+# hermes.service custom — cukup panggil `hermes gateway install` nanti.
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -7,54 +10,41 @@ source "$SCRIPT_DIR/lib.sh"
 
 require_root
 
-step "Bikin direktori Hermes"
+step "Cek apakah Hermes udah keinstall"
+if command -v hermes >/dev/null 2>&1; then
+  ok "Hermes udah ada: $(hermes --version 2>/dev/null || echo 'installed')"
+  return 0 2>/dev/null || exit 0
+fi
+
+step "Install Hermes Agent (Nous Research, official installer)"
+log "Ngambil installer resmi dari github.com/NousResearch/hermes-agent..."
+
+# Flags yang dipake:
+#   --skip-setup    = jangan jalanin wizard interaktif (kita pake configure-hermes.sh)
+#   --skip-browser  = skip Playwright/Chromium (~500MB, opsional, bisa diinstall belakangan)
+#
+# Kalau lo butuh fitur browse web Hermes, edit baris ini hapus --skip-browser
+# atau jalanin manual: cd /usr/local/lib/hermes-agent && npx playwright install --with-deps chromium
+curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh \
+  | bash -s -- --skip-setup --skip-browser
+
+# Installer resmi naro hermes di /usr/local/bin/hermes (root install, FHS layout)
+# atau ~/.local/bin/hermes (non-root). Karena kita root, harusnya /usr/local/bin.
+if command -v hermes >/dev/null 2>&1; then
+  ok "Hermes terinstall: $(which hermes)"
+else
+  warn "Hermes installer selesai tapi 'hermes' ga di PATH."
+  warn "Coba: source ~/.bashrc; which hermes"
+fi
+
+step "Bikin direktori data Hermes (kalau installer skip)"
 mkdir -p "$HERMES_DIR"
 chmod 700 "$HERMES_DIR"
 
-step "Install Hermes Agent (npm)"
-# Hermes biasanya dipakai sebagai package npm. Kita install di $HERMES_DIR
-# supaya gampang upgrade dan ga ngotorin global namespace lain.
-cd "$HERMES_DIR"
-if [[ ! -f package.json ]]; then
-  cat > package.json <<'EOF'
-{
-  "name": "hermes-runtime",
-  "version": "1.0.0",
-  "private": true,
-  "description": "Hermes agent runtime container",
-  "dependencies": {}
-}
-EOF
-fi
-
-# Install (kalau belum ada atau lo mau update)
-if [[ ! -d node_modules/hermes-agent ]]; then
-  npm install hermes-agent --no-audit --no-fund
-  ok "hermes-agent terinstall"
-else
-  ok "hermes-agent udah ada (skip install)"
-fi
-
-step "Bikin .env template (kalau belum ada)"
+# Pastiin .env ada
 if [[ ! -f "$HERMES_DIR/.env" ]]; then
   install -m 600 "$REPO_DIR/templates/hermes.env.template" "$HERMES_DIR/.env"
-  ok ".env template di-copy ke $HERMES_DIR/.env"
-  warn "INGAT: edit dulu $HERMES_DIR/.env atau jalanin: bash configure-hermes.sh"
-else
-  ok ".env udah ada (skip)"
+  ok ".env template di-copy"
 fi
 
-step "Bikin config.yaml (kalau belum ada)"
-if [[ ! -f "$HERMES_DIR/config.yaml" ]]; then
-  install -m 600 "$REPO_DIR/templates/hermes-config.yaml.template" "$HERMES_DIR/config.yaml"
-  ok "config.yaml di-copy"
-else
-  ok "config.yaml udah ada (skip)"
-fi
-
-step "Install systemd service: hermes"
-install -m 644 "$REPO_DIR/services/hermes.service" /etc/systemd/system/hermes.service
-systemctl daemon-reload
-systemctl enable hermes >/dev/null 2>&1
-# Sengaja ga auto-restart hermes di sini — user belum isi token Telegram.
-ok "Service hermes terdaftar (belum di-start; isi .env dulu)"
+ok "Hermes ready. Konfigurasi token via: bash configure-hermes.sh"

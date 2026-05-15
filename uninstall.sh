@@ -34,7 +34,7 @@ if ! confirm "Lanjut uninstall?"; then
 fi
 
 step "Stop & disable systemd services"
-for svc in hermes 9router-tunnel 9router; do
+for svc in hermes hermes-gateway 9router-tunnel 9router; do
   if systemctl list-unit-files | grep -q "^${svc}.service"; then
     systemctl stop "$svc" 2>/dev/null || true
     systemctl disable "$svc" 2>/dev/null || true
@@ -44,11 +44,13 @@ for svc in hermes 9router-tunnel 9router; do
 done
 systemctl daemon-reload
 
-step "Hapus binary cloudflared"
+step "Hapus binary"
 rm -f /usr/local/bin/cloudflared
+rm -f /usr/local/bin/hermes
 
-step "Hapus npm packages"
+step "Hapus npm + Python packages"
 npm uninstall -g 9router 2>/dev/null || true
+rm -rf /usr/local/lib/hermes-agent 2>/dev/null || true
 
 if confirm "Hapus juga /root/.hermes (KONFIG + .env + secret)?"; then
   rm -rf /root/.hermes

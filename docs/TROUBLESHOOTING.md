@@ -1,7 +1,34 @@
 # Troubleshooting
 
-Masalah-masalah umum + cara fix-nya. Kalau ada yang gak ke-cover, kasih issue
-di repo atau cek `journalctl -u <service> -f` dulu.
+Masalah-masalah umum + cara fix-nya.
+
+> **TL;DR**: kalau install gagal di tengah jalan, langsung jalanin
+> `sudo bash fix.sh` — itu yang paling sering nyelametin.
+
+---
+
+## Quick recovery
+
+### Install gagal di tengah / ada service yang missing
+
+Tanda-tandanya:
+- `Failed to start hermes.service: Unit hermes.service not found`
+- `9router-tunnel.service: Main process exited, code=killed, status=9/KILL`
+- `cat: /root/.hermes/tunnel-url.txt: No such file or directory`
+- restart counter ratusan kali (`restart counter is at 738`)
+
+```bash
+sudo bash fix.sh
+```
+
+`fix.sh` bakal:
+1. Hapus systemd unit lama yang restart-loop / typo
+2. Pasang ulang `9router-tunnel.service` versi baru (pake `--protocol http2`,
+   anti UDP block)
+3. Install Hermes pake **installer resmi Nous Research** (Python, bukan npm)
+4. Bikin `tunnel-url.txt` lagi
+
+Aman dijalanin walaupun install.sh udah selesai — idempotent.
 
 ---
 
@@ -9,7 +36,6 @@ di repo atau cek `journalctl -u <service> -f` dulu.
 
 ### Dashboard ga ke-load di browser
 
-**Cek:**
 ```bash
 systemctl status 9router
 ss -tlnp | grep 20128
@@ -17,41 +43,53 @@ ss -tlnp | grep 20128
 
 **Fix:**
 - Service mati? `systemctl restart 9router`
-- Port ga listening? Cek log: `journalctl -u 9router -n 100`
-- Firewall blokir? `ufw allow 20128/tcp` (kalau lo akses lewat IP, bukan tunnel)
+- Port ga listening? `journalctl -u 9router -n 100`
+- Firewall blokir? `ufw allow 20128/tcp`
 
-### Tunnel URL ga muncul / 404
+### Tunnel URL ga muncul / cloudflared restart-loop
 
-```bash
-# Cek service
-systemctl status 9router-tunnel
-
-# Cek log
-tail -50 /var/log/9router-tunnel.log
-
-# Restart + tunggu URL baru
-systemctl restart 9router-tunnel
-sleep 8
-grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' /var/log/9router-tunnel.log | tail -1
+Gejala:
+```
+9router-tunnel.service: Main process exited, code=killed, status=9/KILL
+restart counter is at 738.
 ```
 
-Kalau berkali-kali gagal, mungkin Cloudflare quick tunnel lagi rate-limit.
-Tunggu 5–10 menit, atau pakai **named tunnel** (perlu Cloudflare account +
-domain) — lihat bagian [Named Tunnel](#named-tunnel) di bawah.
+**Penyebab paling umum**: VPS lo blokir UDP port 7844 (yang dipake QUIC).
+Cloudflared coba pake QUIC dulu, gagal, di-kill, di-restart, gagal lagi → loop.
+
+**Fix:**
+```bash
+sudo bash fix.sh
+```
+
+Atau manual:
+```bash
+# Edit unit file
+sudo systemctl edit --full 9router-tunnel
+# Ganti baris ExecStart, tambahin --protocol http2:
+#   ExecStart=/usr/local/bin/cloudflared tunnel --url http://localhost:20128 \
+#             --protocol http2 --no-autoupdate
+
+sudo systemctl reset-failed 9router-tunnel
+sudo systemctl daemon-reload
+sudo systemctl restart 9router-tunnel
+sleep 8
+journalctl -u 9router-tunnel -n 30 --no-pager | grep trycloudflare.com
+```
+
+### Cek tunnel URL secara manual
+
+```bash
+journalctl -u 9router-tunnel --since "5 min ago" --no-pager \
+  | grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' | tail -1
+```
 
 ### Lupa password admin 9Router
 
 ```bash
-# Hapus DB user (HATI-HATI: provider config tetap aman, cuma user yg di-reset)
-ls /root/.9router/
-# Cari file db.json atau auth.json — backup dulu
 cp /root/.9router/db.json /root/.9router/db.json.bak
-
-# Edit / hapus user yang ada
-# (cara persisnya tergantung versi 9router; check struct file dulu)
 nano /root/.9router/db.json
-
-# Restart
+# (cari user object → set password kosong → restart)
 systemctl restart 9router
 # Buka dashboard → bakal minta set password lagi
 ```
@@ -66,22 +104,19 @@ systemctl restart 9router
    ```bash
    # OpenRouter
    curl https://openrouter.ai/api/v1/models -H "Authorization: Bearer sk-or-v1-..."
-
    # Groq
    curl https://api.groq.com/openai/v1/models -H "Authorization: Bearer gsk_..."
-
    # Gemini
    curl "https://generativelanguage.googleapis.com/v1beta/openai/models" \
      -H "Authorization: Bearer AIza..."
    ```
-2. Kalau curl direct OK tapi 9router reject → restart 9router
-   (`systemctl restart 9router`).
-3. Kalau curl direct juga gagal → key salah / dirotasi / belum approved.
+2. Kalau curl direct OK tapi 9router reject → restart 9router.
+3. Kalau curl direct juga gagal → key salah / dirotasi.
 
 ### Validasi pass tapi chat completion 401
 
 Biasanya base URL salah. Pastikan format:
-- OpenRouter: `https://openrouter.ai/api/v1` (TANPA trailing slash)
+- OpenRouter: `https://openrouter.ai/api/v1`
 - Groq: `https://api.groq.com/openai/v1`
 - Gemini: `https://generativelanguage.googleapis.com/v1beta/openai`
 - Mistral: `https://api.mistral.ai/v1`
@@ -89,72 +124,84 @@ Biasanya base URL salah. Pastikan format:
 ### 429 Rate Limit terus
 
 Smart fallback otomatis switch ke model berikutnya — tapi kalau **semua**
-provider kena, cuma ada 2 opsi:
-1. Tunggu reset (biasanya per menit/jam/hari).
+provider kena, opsi:
+1. Tunggu reset (per menit/jam/hari, beda-beda).
 2. Tambah provider lain via `bash add-provider.sh`.
 
 ---
 
 ## Hermes (Telegram bot)
 
+> **Catatan**: Hermes Agent itu Python (Nous Research). Service systemd-nya
+> dibikin sama `hermes gateway install` — namanya `hermes-gateway`, bukan
+> `hermes`. Kalau lo liat tutorial yang nyebut `hermes.service`, itu udah
+> outdated.
+
 ### Bot ga respond di Telegram
 
 ```bash
 # 1. Cek service
-systemctl status hermes
+systemctl status hermes-gateway
 
 # 2. Cek log
-journalctl -u hermes -n 50 --no-pager
+journalctl -u hermes-gateway -n 50 --no-pager
 ```
 
-**Error patterns yang umum:**
+### `Unit hermes.service not found`
 
-#### `TELEGRAM_BOT_TOKEN missing`
+Service name-nya `hermes-gateway`, bukan `hermes`. Atau Hermes belum keinstall
+sama sekali. Jalanin:
 ```bash
+sudo bash fix.sh
 bash configure-hermes.sh
 ```
 
-#### `Conflict: terminated by other getUpdates request`
-Token Telegram lo dipake di tempat lain (atau ada 2 instance hermes jalan).
+### `command not found: hermes`
+
+Installer Nous Research naro `hermes` di `/usr/local/bin/hermes`. Cek:
 ```bash
-systemctl stop hermes
-ps aux | grep hermes
-# kill manual kalau ada zombie
-systemctl start hermes
+ls -la /usr/local/bin/hermes
+which hermes
 ```
 
-#### `ECONNREFUSED 127.0.0.1:20128`
+Kalau ga ada, `fix.sh` bakal install ulang.
+
+### `Conflict: terminated by other getUpdates request`
+
+Token Telegram lo dipake di tempat lain (atau ada 2 instance jalan).
+```bash
+systemctl stop hermes-gateway
+ps aux | grep hermes
+# kill manual kalau ada zombie
+systemctl start hermes-gateway
+```
+
+### `ECONNREFUSED 127.0.0.1:20128`
+
 9Router belum jalan.
 ```bash
 systemctl restart 9router
 sleep 3
-systemctl restart hermes
+systemctl restart hermes-gateway
 ```
 
-#### `401 Unauthorized` saat panggil 9router
-9router API key di Hermes salah/expired.
-```bash
-# Generate key baru di dashboard, terus:
-bash configure-hermes.sh
-```
+### Bot respond, tapi "model not found"
 
-#### Bot respond, tapi "model not found"
 Combo `free_smart_fallback` belum ada modelnya.
-1. Buka dashboard 9router
+1. Buka dashboard 9router (`cat /root/.hermes/tunnel-url.txt`)
 2. Tab **Combos** → `free_smart_fallback` → Add Model
 3. Tambahin minimal 1 model dari provider yang lo punya
 
 ### Bot respond ke orang lain (security!)
 
 ```bash
-# Cek owner ID
+grep TELEGRAM_ALLOWED_USERS /root/.hermes/.env
 grep TELEGRAM_OWNER_ID /root/.hermes/.env
 ```
 
 Pastikan ID lo benar (chat sama @userinfobot di Telegram).
-
+Kalau salah:
 ```bash
-# Update kalau salah
 bash configure-hermes.sh
 ```
 
@@ -165,13 +212,9 @@ bash configure-hermes.sh
 ### Disk penuh
 
 ```bash
-# Cek
 df -h
 du -sh /var/log /root/.hermes /root/.9router
-
-# Bersihin
 journalctl --vacuum-time=7d
-truncate -s 0 /var/log/9router-tunnel.log
 apt-get clean
 ```
 
@@ -179,7 +222,7 @@ apt-get clean
 
 ```bash
 free -h
-# Kalau swap ga ada / kecil:
+# Tambah swap kalau perlu:
 fallocate -l 2G /swapfile
 chmod 600 /swapfile
 mkswap /swapfile
@@ -190,39 +233,26 @@ echo '/swapfile none swap sw 0 0' >> /etc/fstab
 ### Service crash terus (Restart=always loop)
 
 ```bash
-# Liat exit code + reason
-systemctl status hermes
-journalctl -u hermes -n 100 --no-pager
+systemctl status <service-name>
+journalctl -u <service-name> -n 100 --no-pager
 
-# Disable temporary
-systemctl stop hermes
-systemctl disable hermes
-
-# Setelah fix:
-systemctl enable --now hermes
+# Stop temporary biar gak ngeloop sambil debug
+systemctl stop <service-name>
+systemctl reset-failed <service-name>
 ```
 
 ---
 
 ## Named Tunnel (URL permanen)
 
-Kalau lo capek URL random tiap restart, pake named tunnel. Butuh:
-- Akun Cloudflare (gratis)
-- Domain di Cloudflare (gratis kalau lo udah punya, atau beli ~$10/tahun)
+Quick tunnel URL-nya berubah tiap restart. Kalau capek, pake named tunnel.
+Butuh akun Cloudflare + domain.
 
 ```bash
-# 1. Login Cloudflare
 cloudflared tunnel login
-# (buka URL yang muncul, pilih domain lo)
-
-# 2. Bikin tunnel
 cloudflared tunnel create 9router-prod
-# Output: tunnel ID + path ke credentials json
-
-# 3. Route DNS
 cloudflared tunnel route dns 9router-prod 9router.yourdomain.com
 
-# 4. Bikin config
 mkdir -p /etc/cloudflared
 cat > /etc/cloudflared/config.yml <<EOF
 tunnel: 9router-prod
@@ -234,37 +264,27 @@ ingress:
   - service: http_status:404
 EOF
 
-# 5. Ganti systemd service
+# Ganti quick tunnel dengan named tunnel
 systemctl stop 9router-tunnel
 systemctl disable 9router-tunnel
 
-# Pakai cloudflared service install resmi
 cloudflared service install
 systemctl restart cloudflared
 systemctl enable cloudflared
-
-# Cek
-systemctl status cloudflared
-# Buka: https://9router.yourdomain.com
 ```
 
 ---
 
 ## Reset total (nuklir)
 
-Kalau semua udah kacau dan lo cuma mau mulai dari awal:
-
 ```bash
 sudo bash uninstall.sh
 # konfirmasi semua y
 
-# Pull update repo
 cd ~/cara-setup-agent
 git pull
-
-# Install ulang
 sudo bash install.sh
 ```
 
-API key di provider (OpenRouter dll) tetap aman — gak ke-revoke. Tinggal
-paste lagi di `bash add-provider.sh`.
+API key di provider tetap aman — gak ke-revoke. Tinggal paste lagi di
+`bash add-provider.sh`.
