@@ -43,6 +43,20 @@ if [[ ! -f "$HERMES_DIR/.env" ]]; then
   ok ".env template di-copy"
 fi
 
+# config.yaml — INI YANG PALING PENTING.
+# Default config dari Hermes installer ngarahin ke OpenRouter/Anthropic, BUKAN
+# 9router. Tanpa replace ini, `hermes gateway install` jalan tapi `hermes`
+# coba connect ke endpoint yg salah → bot ga nyambung sama 9router.
+if [[ ! -f "$HERMES_DIR/config.yaml" ]]; then
+  install -m 600 "$REPO_DIR/templates/hermes-config.yaml.template" "$HERMES_DIR/config.yaml"
+  ok "config.yaml di-copy (provider=custom, base_url=9router)"
+else
+  warn "config.yaml udah ada — skip biar customisasi lo gak ke-overwrite."
+  warn "Kalo bot ga nyambung, backup terus replace pake template:"
+  echo "    cp $HERMES_DIR/config.yaml $HERMES_DIR/config.yaml.bak"
+  echo "    cp $REPO_DIR/templates/hermes-config.yaml.template $HERMES_DIR/config.yaml"
+fi
+
 # SOUL.md (persona) — Hermes bakal load file ini tiap respond
 if [[ ! -f "$HERMES_DIR/SOUL.md" ]]; then
   install -m 644 "$REPO_DIR/templates/SOUL.md.template" "$HERMES_DIR/SOUL.md"
