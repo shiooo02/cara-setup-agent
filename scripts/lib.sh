@@ -160,3 +160,77 @@ confirm() {
   read -rp "$prompt (y/n): " answer
   [[ "$answer" =~ ^[Yy] ]]
 }
+
+# ---------- Memory / swap helper ----------
+# Cek total RAM (MB). Output cuma angka.
+get_total_mem_mb() {
+  awk '/MemTotal/ {print int($2/1024)}' /proc/meminfo
+}
+
+# Cek total swap aktif (MB).
+get_total_swap_mb() {
+  awk '/SwapTotal/ {print int($2/1024)}' /proc/meminfo
+}
+
+# Pastiin total (RAM + swap) >= MIN_MB. Kalo kurang, bikin swapfile.
+# Kepake biar `npm install better-sqlite3` (native C++ compile, ~1.5GB peak)
+# pas 9router pertama kali start ga ke-OOM-kill di VPS RAM-rendah.
+ensure_swap_available() {
+  local need_mb="${1:-3072}"  # default minimum total memory: 3GB
+  local ram swap total deficit
+  ram=$(get_total_mem_mb)
+  swap=$(get_total_swap_mb)
+  total=$(( ram + swap ))
+
+  log "RAM: ${ram} MB, swap: ${swap} MB, total: ${total} MB (need: ${need_mb} MB)"
+
+  if (( total >= need_mb )); then
+    ok "Memori cukup, ga butuh swap tambahan"
+    return 0
+  fi
+
+  deficit=$(( need_mb - total ))
+  # Bulatin ke 1024 MB terdekat di atas deficit, minimum 2048
+  local swap_size_mb=2048
+  while (( swap_size_mb < deficit )); do
+    swap_size_mb=$(( swap_size_mb + 1024 ))
+  done
+
+  warn "Memori kurang ${deficit} MB. Bikin swapfile ${swap_size_mb} MB di /swapfile..."
+
+  if [[ -f /swapfile ]]; then
+    log "/swapfile udah ada — coba aktifin"
+    swapon /swapfile 2>/dev/null || true
+    if (( $(get_total_swap_mb) >= swap )); then
+      ok "Swap udah aktif: $(get_total_swap_mb) MB"
+      return 0
+    fi
+  fi
+
+  # Cek disk space dulu — paling enggak swap_size + 500MB free
+  local free_mb
+  free_mb=$(df -m / | awk 'NR==2 {print $4}')
+  if (( free_mb < swap_size_mb + 500 )); then
+    err "Disk free cuma ${free_mb} MB, butuh minimum $((swap_size_mb + 500)) MB."
+    err "Hapus file gede dulu atau resize disk VPS."
+    return 1
+  fi
+
+  # fallocate paling cepet (di ext4/xfs). Fallback ke dd kalo gagal.
+  if ! fallocate -l "${swap_size_mb}M" /swapfile 2>/dev/null; then
+    log "fallocate gagal, pake dd (lebih lambat)"
+    dd if=/dev/zero of=/swapfile bs=1M count="$swap_size_mb" status=progress
+  fi
+
+  chmod 600 /swapfile
+  mkswap /swapfile >/dev/null
+  swapon /swapfile
+
+  # Persist ke /etc/fstab biar tetep ada setelah reboot
+  if ! grep -q '^/swapfile' /etc/fstab 2>/dev/null; then
+    echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    ok "Swap auto-mount on boot ditambahin ke /etc/fstab"
+  fi
+
+  ok "Swap aktif: $(get_total_swap_mb) MB total"
+}

@@ -181,6 +181,7 @@ Lihat [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 | Masalah | Quick fix |
 |---|---|
 | Install gagal di tengah / ada bekasan | `sudo DEEP_CLEAN=1 bash uninstall.sh && sudo bash install.sh` |
+| `setup-9router.sh: ... 95334 Killed` (signal 9) | OOM-killer. Tambah swap: `fallocate -l 4G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile` lalu rerun install |
 | `journalctl -u hermes-gateway: -- No entries --` | Pastiin `bash configure-hermes.sh` udah dijalanin (bukan `install.sh` doang) |
 | Bot ga respond | `journalctl -u hermes-gateway -n 50` |
 | Bot dapet error 401 dari LLM | `cat /root/.hermes/config.yaml \| grep -E 'provider\|base_url'` — harus `custom` + `localhost:20128` |

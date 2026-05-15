@@ -37,6 +37,10 @@ if ! confirm "Lanjut?"; then
   exit 0
 fi
 
+# ---------- 0. Pastikan ada swap (anti OOM-kill di VPS RAM kecil) ----------
+step "Cek memori (RAM + swap)"
+ensure_swap_available 3072 || warn "Memori kurang, install bisa OOM-kill. Lanjut anyway."
+
 # ---------- 1. Bersihin service lama yang bermasalah ----------
 step "Bersihin systemd service lama (restart-loop / typo nama)"
 

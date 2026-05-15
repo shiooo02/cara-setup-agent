@@ -25,6 +25,13 @@ apt-get update -y
 apt-get install -y curl ca-certificates gnupg git build-essential ufw \
   python3 python3-pip jq
 
+# ---------- 1b. Pastikan ada cukup memori (RAM + swap) ----------
+# 9router pertama kali start ngerun `npm install better-sqlite3` di
+# /root/.9router/runtime yang kompilasi native code C++ (~1.5GB peak).
+# VPS RAM 1GB tanpa swap dijamin ke-OOM-kill (signal 9). Bikin swap dulu.
+step "Cek memori (RAM + swap)"
+ensure_swap_available 3072 || die "Bisa-bisa OOM. Tambah RAM atau bersihin disk dulu."
+
 # ---------- 2. Firewall ----------
 step "Buka port firewall (UFW): 22, 80, 443, ${NINER_PORT}"
 if command -v ufw >/dev/null 2>&1; then
