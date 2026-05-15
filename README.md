@@ -1,6 +1,6 @@
 # Cara Setup Agent: Hermes + 9Router (Tanpa NVIDIA)
 
-Setup otomatis buat Telegram agent (Hermes) yang dapet "otak" LLM dari banyak
+Setup otomatis buat **Telegram agent** (Hermes) yang dapet "otak" LLM dari banyak
 provider gratis sekaligus, lewat satu router (9Router). Cuma butuh **2 perintah**
 di VPS lo, sisanya tinggal paste API key.
 
@@ -18,7 +18,7 @@ di VPS lo, sisanya tinggal paste API key.
               │
               ▼
         Hermes (bot)
-              │   ← API key 9router
+              │   ← API key 9router (config.yaml: provider=custom)
               ▼
         9Router (port 20128)
        /     │      │     \
@@ -26,12 +26,14 @@ di VPS lo, sisanya tinggal paste API key.
   OpenRouter Groq Gemini Cerebras  ← API key tiap provider
 ```
 
-- **Hermes** = bot Telegram yang bisa eksekusi shell, edit file, browse web.
+- **Hermes** = bot Telegram dari [Nous Research](https://github.com/NousResearch/hermes-agent),
+  bisa eksekusi shell, edit file, browse web. Punya persona file (`SOUL.md`).
 - **9Router** = proxy yang gabung banyak provider LLM jadi 1 endpoint.
   Punya dashboard web buat kelola API key tinggal klik-klik.
-- **install.sh** = nginstall Node + 9Router + Hermes + systemd + tunnel.
-- **add-provider.sh** = nambahin provider baru ke 9Router (interaktif, gak perlu
-  hafal URL/curl).
+- **install.sh** = nginstall Node + 9Router + cloudflared + Hermes + systemd.
+- **add-provider.sh** = nambahin provider baru ke 9Router (interaktif).
+- **fix.sh** = repair install yang gagal di tengah jalan.
+- **uninstall.sh** = bersih total (kill PID, hapus docker, hapus semua dir).
 
 ---
 
@@ -44,97 +46,92 @@ di VPS lo, sisanya tinggal paste API key.
 
 ---
 
-## Instalasi (3 langkah)
+## Install
 
-### 1. Clone repo ini di VPS
+### Step 1 — Clone repo (branch: stable)
 
 ```bash
-git clone https://github.com/shiooo02/cara-setup-agent.git
+git clone -b stable https://github.com/shiooo02/cara-setup-agent.git
 cd cara-setup-agent
 ```
 
-### 2. Jalanin installer
+> Branch `stable` = versi terbaru yang udah teruji. Branch lain udah
+> deprecated, bisa lo hapus (lihat [Cleanup branch lama](#cleanup-branch-lama-di-github)).
+
+### Step 2 — Kalo VPS lo udah pernah ada install gagal, bersihin dulu
+
+```bash
+sudo DEEP_CLEAN=1 bash uninstall.sh
+```
+
+Ini bakal kill semua proses 9router/hermes/cloudflared, hapus container
+docker, hapus binary global, hapus `/root/.hermes` + `/root/.9router`,
+dst — bersih total.
+
+Skip step ini kalo VPS lo masih kosong.
+
+### Step 3 — Install fresh
 
 ```bash
 sudo bash install.sh
 ```
 
-Installer bakal:
-- Install Node.js 22 LTS
-- Install 9Router globally (`npm i -g 9router`)
-- Install cloudflared (buat tunnel publik)
-- Install Hermes (Telegram bot)
-- Bikin systemd service: `9router`, `hermes`, `9router-tunnel`
-- Auto-start semuanya
-- Print URL dashboard (cloudflare tunnel) di akhir
+Output akhir:
 
-Di akhir installer lo bakal liat:
 ```
-[OK] 9Router dashboard:  https://xxx-yyy.trycloudflare.com
-[OK] Tunnel URL juga disimpan di:  /root/.hermes/tunnel-url.txt
-[!]  LANGKAH SELANJUTNYA:
-     1) Buka URL di atas di browser, set password admin
-     2) Bikin API key 9router (Settings → API Keys → New)
-     3) Jalanin: bash add-provider.sh
-     4) Set TELEGRAM_BOT_TOKEN: bash configure-hermes.sh
+[OK] 9Router (lokal)   : http://localhost:20128
+[OK] 9Router (publik)  : https://xxx-yyy.trycloudflare.com
+[OK] Tunnel URL juga di /root/.hermes/tunnel-url.txt
+
+LANGKAH SELANJUTNYA:
+   1) Buka URL publik di browser, set password admin
+   2) Bikin API key 9router (Settings > API Keys > New)
+   3) bash add-provider.sh
+   4) bash configure-hermes.sh
 ```
 
-### 3. Tambah API key provider (interaktif)
+### Step 4 — Add minimal 1 provider LLM
 
 ```bash
 bash add-provider.sh
 ```
 
-Lo bakal di-prompt:
-```
-Pilih provider:
-  1) OpenRouter   (banyak model gratis)
-  2) Groq         (paling cepet, free tier gede)
-  3) Google Gemini (gemini-flash gratis)
-  4) Cerebras     (Llama free, super cepet)
-  5) Mistral      (free tier La Plateforme)
-  6) DeepSeek     (murah banget, bukan free tapi worth)
-  7) Custom OpenAI-compatible
-> 1
+Pilih provider yang lo punya API keynya. Recommended: **OpenRouter**
+(banyak model gratis dengan format `:free` suffix). Cara dapet API key tiap
+provider: lihat [docs/PROVIDERS.md](docs/PROVIDERS.md).
 
-API key OpenRouter (sk-or-v1-...): sk-or-v1-xxxxxxxx
-[OK] Validasi key... valid
-[OK] Provider 'OpenRouter' ditambahkan ke 9Router
-[!] Tambah lagi? (y/n)
-```
-
-Ulang sebanyak provider yang lo punya (recommended minimal 2 biar fallback jalan).
-
-Cara dapet API key tiap provider: lihat [docs/PROVIDERS.md](docs/PROVIDERS.md).
-
----
-
-## Konfigurasi Hermes (Telegram bot)
+### Step 5 — Configure Hermes (Telegram bot)
 
 ```bash
 bash configure-hermes.sh
 ```
 
-Lo bakal di-prompt isi:
+Lo bakal di-prompt:
 - Telegram bot token (dari @BotFather)
-- Telegram owner ID (user ID lo)
-- 9Router API key (dari dashboard 9router)
+- Telegram user ID lo (chat sama @userinfobot)
+- 9Router API key (dari dashboard 9router → Settings → API Keys → New)
 
-Otomatis di-save ke `/root/.hermes/.env`, terus jalanin `hermes gateway install`
-yang bikin systemd service `hermes-gateway` + start.
+Otomatis:
+- Save ke `/root/.hermes/.env`
+- Verify `/root/.hermes/config.yaml` udah nge-route ke 9router
+- Run `hermes gateway install` (bikin systemd service)
+- Start service
 
 Test: kirim `/start` ke bot lo di Telegram. Harus respond.
 
-> Catatan: Hermes Agent dari Nous Research itu **Python package**, bukan npm.
-> Installer resminya bikin perintah `hermes` global, dengan CLI buat manage
-> gateway service-nya sendiri (`hermes gateway install/start/stop`).
+> ⚠️ **Bug penting yang kebanyakan tutorial ga warning:** Default
+> `config.yaml` dari Hermes installer ngarahin LLM call ke OpenRouter,
+> BUKAN ke 9router. Tanpa fix ini, lo udah set semua tapi bot ga jalan
+> (silent fail karena `hermes gateway install` sukses bikin service tapi
+> service crash sebelum sempet nulis log). Repo ini otomatis pasang
+> config.yaml yg bener (`provider: custom`, `base_url: 9router`).
 
 ---
 
 ## Personalize agent (SOUL.md)
 
 Default-nya bot lo namanya **Mahiru**, ngomong Indonesia santai. Mau ganti
-nama/gaya bicara? Edit:
+nama / gaya bicara? Edit:
 
 ```bash
 nano /root/.hermes/SOUL.md
@@ -169,7 +166,7 @@ journalctl -u 9router -f
 journalctl -u hermes-gateway -f
 journalctl -u 9router-tunnel -f
 
-# URL tunnel (kalau lupa)
+# URL tunnel (kalo lupa)
 cat /root/.hermes/tunnel-url.txt
 ```
 
@@ -181,31 +178,48 @@ Lebih lengkap: [docs/COMMANDS.md](docs/COMMANDS.md).
 
 Lihat [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
-Singkatnya:
 | Masalah | Quick fix |
 |---|---|
-| Install gagal di tengah / service ga ada / restart-loop | `sudo bash fix.sh` |
-| Dashboard ga keload | `systemctl restart 9router` |
-| Bot ga respond | `journalctl -u hermes-gateway -n 50` cek error |
-| API key kena reject | Test pake `bash test-provider.sh <prefix>` |
+| Install gagal di tengah / ada bekasan | `sudo DEEP_CLEAN=1 bash uninstall.sh && sudo bash install.sh` |
+| `journalctl -u hermes-gateway: -- No entries --` | Pastiin `bash configure-hermes.sh` udah dijalanin (bukan `install.sh` doang) |
+| Bot ga respond | `journalctl -u hermes-gateway -n 50` |
+| Bot dapet error 401 dari LLM | `cat /root/.hermes/config.yaml \| grep -E 'provider\|base_url'` — harus `custom` + `localhost:20128` |
+| API key kena reject | `bash test-provider.sh <prefix>` |
 | Tunnel URL ilang | `systemctl restart 9router-tunnel && sleep 8 && cat /root/.hermes/tunnel-url.txt` |
-| `9router-tunnel.service: status=9/KILL` (restart loop) | `sudo bash fix.sh` (pasang ulang pake `--protocol http2`) |
+| `9router-tunnel: status=9/KILL` (restart loop) | `sudo bash fix.sh` (pasang ulang pake `--protocol http2`) |
 
 ---
 
 ## Uninstall
 
-Bersih total — stop semua service, kill PID, hapus docker container, hapus semua direktori:
+Bersih total — stop semua service, kill PID, hapus docker, hapus semua dir:
 
 ```bash
-# Interaktif (nanya di tiap step)
+# Interaktif
 sudo bash uninstall.sh
 
-# Atau paksa hapus semua tanpa nanya:
+# Atau hapus paksa tanpa nanya
 sudo DEEP_CLEAN=1 bash uninstall.sh
 ```
 
-Setelah ini lo bisa `sudo bash install.sh` lagi dari nol tanpa sisa.
+---
+
+## Cleanup branch lama di GitHub
+
+Repo lo punya 5 branch dari iterasi development. Tinggal pake `stable`. Hapus sisanya:
+
+```bash
+# Di laptop lo (bukan VPS), atau di VPS via gh CLI:
+git push origin --delete fix-hermes-install-and-tunnel-loop
+git push origin --delete v2-fixed
+git push origin --delete v3-soul-and-aggressive-uninstall
+git push origin --delete setup-hermes-9router-no-nvidia
+```
+
+Atau lewat web GitHub:
+1. Buka https://github.com/shiooo02/cara-setup-agent/branches
+2. Settings → General → Default branch → ubah ke `stable`
+3. Balik ke /branches → klik tong sampah di tiap branch lain
 
 ---
 
@@ -231,34 +245,24 @@ cara-setup-agent/
 ├── README.md                  ← lo lagi baca ini
 ├── install.sh                 ← installer utama
 ├── fix.sh                     ← repair install yang gagal di tengah jalan
+├── uninstall.sh               ← bersih total (DEEP_CLEAN=1 buat skip prompt)
 ├── add-provider.sh            ← tambah API key provider (interaktif)
-├── configure-hermes.sh        ← isi token Telegram + API key 9router + install gateway
+├── configure-hermes.sh        ← isi token Telegram + API key 9router + start
 ├── test-provider.sh           ← test provider tertentu
-├── uninstall.sh
 ├── scripts/
 │   ├── lib.sh                 ← helper (logging, get cli token)
 │   ├── setup-9router.sh
-│   ├── setup-hermes.sh        ← pake installer resmi Nous Research (Python)
-│   └── setup-tunnel.sh        ← cloudflared --protocol http2 (anti restart-loop)
+│   ├── setup-hermes.sh        ← installer resmi Nous Research + pasang config.yaml
+│   └── setup-tunnel.sh        ← cloudflared --protocol http2
 ├── services/
 │   ├── 9router.service
-│   └── 9router-tunnel.service ← Hermes pake systemd unit-nya sendiri
+│   └── 9router-tunnel.service ← Hermes pake systemd unit-nya sendiri (bikin sama 'hermes gateway install')
 ├── templates/
 │   ├── hermes.env.template
-│   ├── hermes-config.yaml.template
+│   ├── hermes-config.yaml.template ← provider=custom, base_url=9router
 │   └── SOUL.md.template            ← persona "Mahiru" default
 └── docs/
     ├── PROVIDERS.md           ← cara dapet API key tiap provider
     ├── COMMANDS.md            ← cheatsheet command
     └── TROUBLESHOOTING.md
 ```
-
----
-
-## Credit
-
-Tutorial original dari temen lo (yang ngajarin pake NVIDIA) tetap jadi basis.
-Repo ini cuma:
-1. Otomatisasi pake bash script
-2. Ganti NVIDIA → provider gratis lain
-3. Bikin add-provider interaktif (gak perlu hafal curl/JSON)
