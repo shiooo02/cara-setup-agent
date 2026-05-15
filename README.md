@@ -131,6 +131,33 @@ Test: kirim `/start` ke bot lo di Telegram. Harus respond.
 
 ---
 
+## Personalize agent (SOUL.md)
+
+Default-nya bot lo namanya **Mahiru**, ngomong Indonesia santai. Mau ganti
+nama/gaya bicara? Edit:
+
+```bash
+nano /root/.hermes/SOUL.md
+```
+
+File ini di-load Hermes setiap kali respond, **gak perlu restart**. Contoh:
+
+```markdown
+## Siapa kamu
+
+Nama kamu Aiko. Kamu asisten AI yang formal dan profesional.
+
+## Cara komunikasi
+
+- Pakai bahasa Indonesia formal.
+- Selalu sebut user dengan "Anda".
+- Jangan pake slang atau emoji.
+```
+
+Kosongin file ini (atau hapus) buat balik ke personality default Hermes.
+
+---
+
 ## Cek status / log
 
 ```bash
@@ -168,11 +195,17 @@ Singkatnya:
 
 ## Uninstall
 
+Bersih total — stop semua service, kill PID, hapus docker container, hapus semua direktori:
+
 ```bash
+# Interaktif (nanya di tiap step)
 sudo bash uninstall.sh
+
+# Atau paksa hapus semua tanpa nanya:
+sudo DEEP_CLEAN=1 bash uninstall.sh
 ```
 
-Bakal nanyain konfirmasi. Hapus service + file di `/root/.hermes` + `/root/.9router`.
+Setelah ini lo bisa `sudo bash install.sh` lagi dari nol tanpa sisa.
 
 ---
 
@@ -212,7 +245,8 @@ cara-setup-agent/
 │   └── 9router-tunnel.service ← Hermes pake systemd unit-nya sendiri
 ├── templates/
 │   ├── hermes.env.template
-│   └── hermes-config.yaml.template
+│   ├── hermes-config.yaml.template
+│   └── SOUL.md.template            ← persona "Mahiru" default
 └── docs/
     ├── PROVIDERS.md           ← cara dapet API key tiap provider
     ├── COMMANDS.md            ← cheatsheet command

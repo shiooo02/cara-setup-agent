@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # configure-hermes.sh — set Telegram bot token + 9router API key buat Hermes,
-# terus install systemd service via `hermes gateway install`.
+# terus install + start systemd service via `hermes gateway install`.
 #
 # Pakai:  bash configure-hermes.sh
 #
@@ -9,13 +9,21 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/scripts/lib.sh"
 
 require_root
-ensure_hermes_env
 
+# Pastikan PATH ke-pickup hermes binary
+export PATH="/usr/local/bin:/root/.local/bin:$PATH"
+
+ensure_hermes_env
 ENV_FILE="$HERMES_DIR/.env"
 
-# Cek hermes ada
+# ============================================================================
+# Pre-flight checks
+# ============================================================================
 if ! command -v hermes >/dev/null 2>&1; then
-  die "Hermes ga ada di PATH. Jalanin install.sh dulu."
+  err "Binary 'hermes' ga ditemukan di PATH."
+  err "Cek: which hermes; ls -la /usr/local/bin/hermes /root/.local/bin/hermes"
+  err "Kalau memang ga ada, jalanin: sudo bash install.sh  (atau bash fix.sh)"
+  exit 1
 fi
 
 # Helper: baca value existing dari .env
@@ -55,9 +63,8 @@ fi
 TG_OWNER=$(ask "Telegram owner ID (angka)" "$existing")
 if [[ -n "$TG_OWNER" ]]; then
   set_env_var "$ENV_FILE" "TELEGRAM_OWNER_ID" "$TG_OWNER"
-  # Hermes pake TELEGRAM_ALLOWED_USERS buat allowlist
   set_env_var "$ENV_FILE" "TELEGRAM_ALLOWED_USERS" "$TG_OWNER"
-  ok "Owner ID di-save"
+  ok "Owner ID di-save (allowlist diset)"
 fi
 
 # ---------- 9Router API key ----------
@@ -78,42 +85,106 @@ if [[ -z "$(get_existing DEFAULT_MODEL)" ]]; then
   set_env_var "$ENV_FILE" "DEFAULT_MODEL" "free_smart_fallback"
 fi
 
-# ---------- Install + start gateway service ----------
-step "Install / restart Hermes gateway service"
+# ---------- Sanity check: minimal .env udah lengkap? ----------
+MISSING=()
+for k in TELEGRAM_BOT_TOKEN TELEGRAM_OWNER_ID OPENAI_API_KEY; do
+  v=$(get_existing "$k")
+  [[ -z "$v" ]] && MISSING+=("$k")
+done
 
-# `hermes gateway install` bikin systemd unit otomatis
-if systemctl list-unit-files 2>/dev/null | grep -q '^hermes'; then
-  log "Hermes gateway service udah ada — restart aja"
-  systemctl restart hermes-gateway 2>/dev/null \
-    || systemctl restart hermes 2>/dev/null \
-    || hermes gateway restart 2>/dev/null \
-    || true
-else
-  log "Install Hermes gateway service via 'hermes gateway install'"
-  hermes gateway install || warn "hermes gateway install gagal — coba manual"
-  hermes gateway start 2>/dev/null || systemctl start hermes-gateway 2>/dev/null || true
+if [[ ${#MISSING[@]} -gt 0 ]]; then
+  warn ".env masih ada yang kosong: ${MISSING[*]}"
+  warn "Hermes mungkin ga jalan. Rerun script ini kalau lo udah punya semua."
+  if ! confirm "Tetep lanjut install gateway service?"; then
+    exit 0
+  fi
 fi
 
-sleep 3
+# ============================================================================
+# Install / restart Hermes gateway service
+# ============================================================================
+step "Install Hermes gateway service via 'hermes gateway install'"
 
-# Cari nama unit yang dipake
-SVC=""
-for s in hermes-gateway hermes; do
-  if systemctl list-unit-files 2>/dev/null | grep -q "^${s}.service"; then
-    SVC="$s"
+# Ini bakal bikin systemd unit otomatis (biasanya hermes-gateway.service).
+# Kalau udah ada, command ini idempotent.
+if hermes gateway install 2>&1 | tee /tmp/hermes-gateway-install.log; then
+  ok "'hermes gateway install' selesai"
+else
+  warn "'hermes gateway install' return error. Output di /tmp/hermes-gateway-install.log"
+fi
+
+# Refresh systemd buat ke-detect unit baru
+systemctl daemon-reload
+
+# ============================================================================
+# Auto-detect nama service yang Hermes bikin
+# ============================================================================
+step "Auto-detect nama systemd unit Hermes"
+
+HERMES_SVC=""
+for candidate in hermes-gateway hermes hermes.service hermes-bot; do
+  if systemctl list-unit-files --no-pager 2>/dev/null | grep -qE "^${candidate}\\.service"; then
+    HERMES_SVC="$candidate"
     break
   fi
 done
 
-if [[ -n "$SVC" ]] && systemctl is-active --quiet "$SVC"; then
-  ok "Hermes gateway jalan! (service: $SVC)"
+if [[ -z "$HERMES_SVC" ]]; then
+  warn "Belum ke-detect systemd unit Hermes."
+  log "Coba list unit yang mengandung 'hermes':"
+  systemctl list-unit-files --no-pager 2>/dev/null | grep -i hermes || echo "    (kosong)"
+  echo
+  warn "Coba jalanin manual: hermes gateway install"
+  echo
+  warn "Atau jalanin foreground biar liat error langsung:"
+  echo "    hermes gateway"
+  exit 1
+fi
+
+ok "Service Hermes: ${HERMES_SVC}.service"
+
+# ============================================================================
+# Start service
+# ============================================================================
+step "Start ${HERMES_SVC}"
+systemctl reset-failed "$HERMES_SVC" 2>/dev/null || true
+systemctl enable "$HERMES_SVC" >/dev/null 2>&1 || true
+systemctl restart "$HERMES_SVC"
+
+sleep 4
+
+if systemctl is-active --quiet "$HERMES_SVC"; then
+  ok "Hermes gateway jalan! (service: $HERMES_SVC)"
   echo
   echo "Test sekarang: kirim ${C_BOLD}/start${C_RESET} ke bot lo di Telegram."
-  echo "Liat log realtime: ${C_BOLD}journalctl -u $SVC -f${C_RESET}"
+  echo "Liat log realtime:  ${C_BOLD}journalctl -u $HERMES_SVC -f${C_RESET}"
 else
-  warn "Hermes gateway belum aktif. Cek log:"
-  echo "    journalctl -u hermes-gateway -n 30 --no-pager"
-  echo "    journalctl -u hermes -n 30 --no-pager"
-  echo "Atau jalanin foreground buat liat error langsung:"
+  err "Hermes gateway ga jalan. Diagnostic:"
+  echo
+  echo "----- STATUS -----"
+  systemctl status "$HERMES_SVC" --no-pager -l | head -20 || true
+  echo
+  echo "----- LOG (30 baris terakhir) -----"
+  journalctl -u "$HERMES_SVC" -n 30 --no-pager || true
+  echo
+  warn "Coba run foreground manual buat liat error langsung:"
   echo "    hermes gateway"
+  exit 1
 fi
+
+# ============================================================================
+# Final tip soal SOUL.md
+# ============================================================================
+echo
+cat <<EOF
+
+${C_BOLD}=== Personalize Agent ===${C_RESET}
+
+Persona agent (nama, gaya bicara, etc) ada di:
+    ${C_BOLD}$HERMES_DIR/SOUL.md${C_RESET}
+
+Default-nya 'Mahiru', bahasa Indonesia santai. Edit kapan aja:
+    nano $HERMES_DIR/SOUL.md
+
+File ini di-load tiap request — gak perlu restart service.
+EOF

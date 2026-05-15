@@ -112,13 +112,24 @@ ensure_hermes_env() {
 }
 
 # Set/replace KEY=VALUE di file .env
+# Pake awk biar value bebas karakter (& : / | dll) tanpa khawatir escape sed.
 set_env_var() {
   local file="$1" key="$2" value="$3"
   mkdir -p "$(dirname "$file")"
   touch "$file"
   if grep -q "^${key}=" "$file" 2>/dev/null; then
-    # Pake | sebagai delimiter biar aman dari karakter / di value
-    sed -i "s|^${key}=.*|${key}=${value}|" "$file"
+    local tmp
+    tmp=$(mktemp)
+    awk -v k="$key" -v v="$value" '
+      BEGIN { done = 0 }
+      $0 ~ "^"k"=" {
+        if (!done) { print k"="v; done = 1 }
+        next
+      }
+      { print }
+      END { if (!done) print k"="v }
+    ' "$file" > "$tmp"
+    mv "$tmp" "$file"
   else
     echo "${key}=${value}" >> "$file"
   fi

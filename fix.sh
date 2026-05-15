@@ -111,6 +111,12 @@ if [[ ! -s "$HERMES_DIR/.env" ]] || ! grep -q TELEGRAM_BOT_TOKEN "$HERMES_DIR/.e
   ok ".env template dipasang"
 fi
 
+# ---------- 5b. Pastikan SOUL.md (persona) ada ----------
+if [[ ! -f "$HERMES_DIR/SOUL.md" ]]; then
+  install -m 644 "$SCRIPT_DIR/templates/SOUL.md.template" "$HERMES_DIR/SOUL.md"
+  ok "SOUL.md (persona Mahiru) dipasang di $HERMES_DIR/SOUL.md"
+fi
+
 # ---------- 6. Summary ----------
 TUNNEL_URL=""
 [[ -f "$HERMES_DIR/tunnel-url.txt" ]] && TUNNEL_URL=$(cat "$HERMES_DIR/tunnel-url.txt")
