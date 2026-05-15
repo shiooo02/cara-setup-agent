@@ -176,7 +176,7 @@ get_total_swap_mb() {
 # Kepake biar `npm install better-sqlite3` (native C++ compile, ~1.5GB peak)
 # pas 9router pertama kali start ga ke-OOM-kill di VPS RAM-rendah.
 ensure_swap_available() {
-  local need_mb="${1:-3072}"  # default minimum total memory: 3GB
+  local need_mb="${1:-4096}"  # default minimum total memory: 4GB
   local ram swap total deficit
   ram=$(get_total_mem_mb)
   swap=$(get_total_swap_mb)
@@ -190,9 +190,11 @@ ensure_swap_available() {
   fi
 
   deficit=$(( need_mb - total ))
-  # Bulatin ke 1024 MB terdekat di atas deficit, minimum 2048
-  local swap_size_mb=2048
-  while (( swap_size_mb < deficit )); do
+  # Bulatin ke 1024 MB terdekat di atas deficit, minimum 4096 (4GB).
+  # Sengaja besar biar kalo install bareng (hermes uv + 9router compile)
+  # kena 2GB peak masing-masing, ga ke-OOM.
+  local swap_size_mb=4096
+  while (( swap_size_mb < deficit + 1024 )); do
     swap_size_mb=$(( swap_size_mb + 1024 ))
   done
 

@@ -9,6 +9,22 @@ User=root
 ExecStart=/usr/bin/9router
 Restart=always
 RestartSec=5
+
+# --- Memory management (penting di VPS RAM kecil) ---
+# Biar OOM-killer bunuh service ini doang, bukan proses lain (kayak
+# bash installer). Pas first start, 9router compile better-sqlite3
+# yg butuh ~800MB sementara - kasih ruang sampe 1GB hard limit.
+# Setelah running normal, biasanya cuma ~150MB.
+MemoryAccounting=yes
+MemoryHigh=800M
+MemoryMax=1024M
+OOMScoreAdjust=300
+
+# --- Boot timeout ---
+# Kasih waktu 5 menit buat npm install better-sqlite3 compile pas
+# first start. Setelah ke-cache, restart cuma 1-2 detik.
+TimeoutStartSec=300
+
 StandardOutput=journal
 StandardError=journal
 
