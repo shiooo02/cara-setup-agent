@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# uninstall.sh — bersih total: stop service, kill PID, hapus docker, hapus
-# semua direktori install. Buat starting fresh tanpa sisa apapun.
+# uninstall.sh - bersih total: stop service, kill PID, hapus docker
+# container, hapus semua direktori install. Buat starting fresh.
 #
 # Pakai:           sudo bash uninstall.sh
 # Skip prompt:     sudo DEEP_CLEAN=1 bash uninstall.sh
@@ -19,19 +19,17 @@ cat <<'EOF'
 Yang bakal dihapus / dibersihin:
 
   Service systemd:
-    - 9router, 9router-tunnel
-    - hermes, hermes-gateway, hermes-cron, hermes-discord (semua varian)
-    - cloudflared (kalau named tunnel)
+    - 9router (legacy npm), 9router-tunnel
+    - hermes, hermes-gateway, hermes-cron, dll
+
+  Docker container & image:
+    - container '9router' (decolua/9router:latest)
+    - image decolua/9router (kalo confirm)
+    - container hermes-* (kalo ada)
 
   Process / PID:
-    - Semua proses 'node ... 9router'
     - Semua proses 'cloudflared'
     - Semua proses 'hermes', 'python ... hermes'
-
-  Docker (kalau lo install Hermes pake Docker):
-    - Container nama hermes/hermes-agent
-    - Image hermes-agent
-    - Volume hermes-data
 
   File:
     - /root/.hermes        (config, .env, sessions, logs, skills, memori, SOUL.md)
@@ -39,11 +37,11 @@ Yang bakal dihapus / dibersihin:
     - /usr/local/lib/hermes-agent  (kode Hermes)
     - /usr/local/bin/hermes, /usr/local/bin/cloudflared
     - /etc/systemd/system/hermes*.service, /etc/systemd/system/9router*.service
-    - npm package: 9router (global)
     - cache: ~/.cache/uv, ~/.cache/pip (hermes-related)
 
   Yang TIDAK dihapus:
-    - Node.js, Python, uv (mungkin masih lo butuh)
+    - Docker engine (mungkin lo butuh buat container lain)
+    - Node.js, Python, uv
     - Firewall rule (UFW)
     - API key di provider (revoke manual di tiap dashboard)
     - Bot Telegram (revoke manual di @BotFather kalau perlu)
@@ -89,7 +87,6 @@ for svc in "${UNITS[@]}"; do
   fi
 done
 
-# User-level systemd (kalau ada)
 if [[ -d /root/.config/systemd/user ]]; then
   for svc in hermes hermes-gateway; do
     rm -f "/root/.config/systemd/user/${svc}.service" 2>/dev/null || true
@@ -99,12 +96,49 @@ fi
 systemctl daemon-reload
 
 # ============================================================================
-# 2. Kill stray processes
+# 2. Stop & remove Docker container 9router
 # ============================================================================
-step "Kill proses yang masih jalan"
+step "Hapus container Docker 9router"
+
+if command -v docker >/dev/null 2>&1; then
+  containers=$(docker ps -a --filter 'name=9router' --format '{{.Names}}' 2>/dev/null || true)
+  if [[ -n "$containers" ]]; then
+    log "Container ditemukan: $containers"
+    echo "$containers" | xargs -r docker stop 2>/dev/null || true
+    echo "$containers" | xargs -r docker rm -f 2>/dev/null || true
+    ok "Container 9router dihapus"
+  fi
+
+  # Cek juga container hermes-* (kalo ada)
+  hermes_containers=$(docker ps -a --filter 'name=hermes' --format '{{.Names}}' 2>/dev/null || true)
+  if [[ -n "$hermes_containers" ]]; then
+    log "Container hermes ditemukan: $hermes_containers"
+    if [[ "$DEEP" == "1" ]] || confirm "Stop & hapus container Hermes?"; then
+      echo "$hermes_containers" | xargs -r docker stop 2>/dev/null || true
+      echo "$hermes_containers" | xargs -r docker rm -f 2>/dev/null || true
+      ok "Container hermes dihapus"
+    fi
+  fi
+
+  # Image cleanup (optional)
+  images=$(docker images --filter 'reference=*9router*' --format '{{.Repository}}:{{.Tag}}' 2>/dev/null || true)
+  if [[ -n "$images" ]]; then
+    log "Image 9router ditemukan: $images"
+    if [[ "$DEEP" == "1" ]] || confirm "Hapus juga image 9router (~200MB)?"; then
+      echo "$images" | xargs -r docker rmi -f 2>/dev/null || true
+      ok "Image dihapus"
+    fi
+  fi
+else
+  log "Docker ga keinstall, skip"
+fi
+
+# ============================================================================
+# 3. Kill stray processes
+# ============================================================================
+step "Kill proses yang masih jalan (non-docker)"
 
 PATTERNS=(
-  "9router"
   "cloudflared.*tunnel"
   "node.*hermes"
   "python.*hermes"
@@ -129,54 +163,20 @@ done
 ok "Proses dibersihin"
 
 # ============================================================================
-# 3. Docker
-# ============================================================================
-if command -v docker >/dev/null 2>&1; then
-  step "Cek Docker"
-  containers=$(docker ps -a --filter 'name=hermes' --format '{{.Names}}' 2>/dev/null || true)
-  if [[ -n "$containers" ]]; then
-    log "Container ditemukan: $containers"
-    if [[ "$DEEP" == "1" ]] || confirm "Stop & hapus container Hermes?"; then
-      echo "$containers" | xargs -r docker stop 2>/dev/null || true
-      echo "$containers" | xargs -r docker rm -f 2>/dev/null || true
-      ok "Container dihapus"
-    fi
-  fi
-
-  images=$(docker images --filter 'reference=*hermes*' --format '{{.Repository}}:{{.Tag}}' 2>/dev/null || true)
-  if [[ -n "$images" ]]; then
-    log "Image ditemukan: $images"
-    if [[ "$DEEP" == "1" ]] || confirm "Hapus image Hermes?"; then
-      echo "$images" | xargs -r docker rmi -f 2>/dev/null || true
-      ok "Image dihapus"
-    fi
-  fi
-
-  volumes=$(docker volume ls --filter 'name=hermes' --format '{{.Name}}' 2>/dev/null || true)
-  if [[ -n "$volumes" ]]; then
-    log "Volume ditemukan: $volumes"
-    if [[ "$DEEP" == "1" ]] || confirm "Hapus volume Hermes (DATA HILANG)?"; then
-      echo "$volumes" | xargs -r docker volume rm -f 2>/dev/null || true
-      ok "Volume dihapus"
-    fi
-  fi
-fi
-
-# ============================================================================
 # 4. Hapus binary
 # ============================================================================
 step "Hapus binary global"
 rm -f /usr/local/bin/cloudflared
 rm -f /usr/local/bin/hermes
 rm -f /root/.local/bin/hermes 2>/dev/null || true
-rm -f /usr/local/bin/9router 2>/dev/null || true
+rm -f /usr/local/bin/9router /usr/bin/9router 2>/dev/null || true  # legacy npm
 ok "Binary dihapus"
 
 # ============================================================================
 # 5. Hapus packages
 # ============================================================================
 step "Hapus npm + python packages"
-npm uninstall -g 9router 2>/dev/null || true
+npm uninstall -g 9router 2>/dev/null || true   # legacy npm install
 rm -rf /usr/local/lib/hermes-agent 2>/dev/null || true
 rm -rf /root/.hermes/hermes-agent 2>/dev/null || true  # legacy layout
 ok "Packages dihapus"
@@ -191,7 +191,7 @@ if [[ "$DEEP" == "1" ]] || confirm "Hapus /root/.hermes (KONFIG, .env, SOUL.md, 
   ok "/root/.hermes dihapus"
 fi
 
-if [[ "$DEEP" == "1" ]] || confirm "Hapus /root/.9router (DB admin + password + provider)?"; then
+if [[ "$DEEP" == "1" ]] || confirm "Hapus /root/.9router (DB admin + password + provider config)?"; then
   rm -rf /root/.9router
   ok "/root/.9router dihapus"
 fi
@@ -232,6 +232,14 @@ for svc in "${UNITS[@]}"; do
     LEFTOVER+=("service: $svc")
   fi
 done
+
+# Cek docker container masih ada
+if command -v docker >/dev/null 2>&1; then
+  docker_left=$(docker ps -a --filter 'name=9router' --format '{{.Names}}' 2>/dev/null || true)
+  if [[ -n "$docker_left" ]]; then
+    LEFTOVER+=("docker: $docker_left")
+  fi
+fi
 
 for pat in "${PATTERNS[@]}"; do
   if pgrep -f "$pat" >/dev/null 2>&1; then

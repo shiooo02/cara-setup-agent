@@ -1,13 +1,8 @@
 #!/usr/bin/env bash
-# install.sh — installer utama buat Hermes + 9Router + Cloudflare tunnel.
+# install.sh - installer utama buat Hermes + 9Router (docker) + Cloudflare tunnel.
 # Tested di Ubuntu 22.04, 24.04, Debian 12.
 #
 # Pakai:  sudo bash install.sh
-#
-# Strategy: install semua binary dulu (sequential, ga ada service jalan),
-# baru di akhir start service satu per satu. Ini biar VPS RAM kecil
-# (1-2GB) ga ke-OOM-kill pas Hermes installer (uv install Python ~1GB)
-# barengan sama 9router service yg lagi compile better-sqlite3 (~800MB).
 #
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,7 +13,7 @@ require_root
 cat <<'BANNER'
 ========================================================
   Hermes + 9Router Installer
-  (No NVIDIA - pakai OpenRouter / Groq / Gemini / dll)
+  9router via Docker (anti-OOM, anti-interactive-menu)
 ========================================================
 BANNER
 echo
@@ -30,19 +25,15 @@ apt-get update -y
 apt-get install -y curl ca-certificates gnupg git build-essential ufw \
   python3 python3-pip jq
 
-# ---------- 1b. Pastikan ada cukup memori ----------
-# Hermes installer (uv + pip install ~100 package Python) makan ~1GB RAM
-# peak. 9router compile better-sqlite3 makan ~800MB. Kalo dijalanin
-# barengan di VPS 1-2GB tanpa swap -> OOM-killer bunuh proses random.
-# Minta total memory >= 4GB (RAM + swap).
+# ---------- 1b. Pastikan ada cukup memori (RAM + swap) ----------
+# Hermes installer (uv + ~100 package Python) makan ~1GB RAM peak.
+# Docker pull image 200MB, runtime 9router cuma ~150MB (no native compile).
+# Total butuh minimum 3GB ramswap.
 step "Cek memori (RAM + swap)"
-ensure_swap_available 4096 || die "Memori terlalu kecil + disk penuh. Resize VPS atau bersihin disk."
+ensure_swap_available 3072 || die "Memori terlalu kecil + disk penuh. Resize VPS atau bersihin disk."
 
 # ---------- 1c. Stop service lama yang lagi jalan ----------
-# Kalo install.sh sebelumnya udah pernah jalan, mungkin 9router /
-# hermes-gateway / 9router-tunnel masih running pake RAM. Stop dulu
-# biar memory plong buat heavy installs.
-step "Stop service yang lagi jalan (biar RAM plong)"
+step "Stop service lama (kalo ada) biar RAM plong"
 for svc in hermes-gateway hermes 9router-tunnel 9router; do
   if systemctl is-active --quiet "$svc" 2>/dev/null; then
     log "Stop $svc"
@@ -50,7 +41,7 @@ for svc in hermes-gateway hermes 9router-tunnel 9router; do
   fi
 done
 
-# Kill stray processes juga (kalo gak ke-manage systemd)
+# Kill stray processes
 pkill -f '9router' 2>/dev/null || true
 pkill -f 'cloudflared.*tunnel' 2>/dev/null || true
 sleep 1
@@ -71,6 +62,8 @@ else
 fi
 
 # ---------- 3. Node.js 22 ----------
+# Masih dibutuhin buat: cloudflared (no), Hermes installer skill scripts (yes),
+# ngeprep buat dev kalo lo mau pake CLI tool jaman now.
 step "Install Node.js 22 LTS"
 if command -v node >/dev/null 2>&1 && [[ "$(node -v)" =~ ^v(2[2-9]|[3-9][0-9]) ]]; then
   ok "Node.js udah ada: $(node -v)"
@@ -82,48 +75,28 @@ fi
 ok "npm: $(npm -v)"
 
 # ============================================================================
-# PHASE 1: Install semua binary (sequential, ga ada service running).
-# Aman di RAM kecil karena cuma 1 heavy install jalan dalam satu waktu.
+# Install: 9router (docker), cloudflared, hermes
 # ============================================================================
 
-step "PHASE 1: Install binary"
-
-# 4. 9Router (cuma install + register service, BELUM di-start)
+# 4. 9Router (docker container - langsung running di akhir script ini)
 bash "$SCRIPT_DIR/scripts/setup-9router.sh"
 
-# 5. cloudflared binary
+# 5. cloudflared binary + tunnel service (BELUM di-start sampe 9router siap)
 bash "$SCRIPT_DIR/scripts/setup-tunnel.sh"
 
-# 6. Hermes (uv + Python + ~100 package - ini paling berat)
+# 6. Hermes Agent (uv + Python + ~100 package - ini paling berat)
 bash "$SCRIPT_DIR/scripts/setup-hermes.sh"
 
 # ============================================================================
-# PHASE 2: Start service satu per satu.
-# 9router pertama kali start bakal compile better-sqlite3 (1-3 menit,
-# ~800MB peak). Tunggu sampe selesai dulu sebelum start tunnel.
+# Start tunnel sekarang (9router udah jalan dari setup-9router.sh)
 # ============================================================================
 
-step "PHASE 2: Start 9router (first start = compile better-sqlite3, 1-3 menit)"
-systemctl reset-failed 9router 2>/dev/null || true
-systemctl restart 9router
-
-log "Nunggu 9router ready di port ${NINER_PORT} (timeout 5 menit)..."
-if wait_for_9router 300; then
-  ok "9router up & running di ${NINER_BASE}"
+step "Verify 9router masih responsive"
+if wait_for_9router 30; then
+  ok "9router responsive di ${NINER_BASE}"
 else
-  err "9router belum nyahut setelah 5 menit."
-  echo
-  echo "----- LOG 9ROUTER -----"
-  journalctl -u 9router -n 30 --no-pager 2>/dev/null || true
-  echo
-  warn "Kalo ada 'Killed' di log = OOM. Cek 'free -h':"
-  echo "    free -h"
-  echo
-  warn "Kalo total RAM+swap < 4GB, install swap lebih gede:"
-  echo "    swapoff /swapfile; rm /swapfile"
-  echo "    fallocate -l 6G /swapfile && chmod 600 /swapfile"
-  echo "    mkswap /swapfile && swapon /swapfile"
-  echo "    sudo bash install.sh    # rerun"
+  err "9router ga nyahut. Cek: docker logs 9router"
+  docker logs 9router 2>&1 | tail -20
   exit 1
 fi
 
@@ -132,9 +105,8 @@ systemctl reset-failed 9router-tunnel 2>/dev/null || true
 systemctl restart 9router-tunnel
 
 step "Nunggu tunnel URL kebentuk..."
-# Source setup-tunnel.sh buat dapet capture_tunnel_url() function
 source "$SCRIPT_DIR/scripts/setup-tunnel.sh"
-capture_tunnel_url || warn "Tunnel URL belum keluar — coba 'systemctl restart 9router-tunnel' lagi nanti"
+capture_tunnel_url || warn "Tunnel URL belum keluar - coba 'systemctl restart 9router-tunnel' lagi nanti"
 
 # ---------- 7. Summary ----------
 TUNNEL_URL=""
@@ -142,32 +114,35 @@ TUNNEL_URL=""
 
 cat <<EOF
 
-${C_GREEN}================ INSTALASI SELESAI ================${C_RESET}
+================ INSTALASI SELESAI ================
 
   9Router (lokal)   : ${NINER_BASE}
   9Router (publik)  : ${TUNNEL_URL:-<belum tersedia, cek 'journalctl -u 9router-tunnel'>}
+  9Router via       : Docker container 'decolua/9router:latest'
   Hermes config dir : $HERMES_DIR
   Hermes binary     : $(command -v hermes 2>/dev/null || echo '<not found, cek PATH>')
 
-${C_BOLD}LANGKAH SELANJUTNYA:${C_RESET}
+LANGKAH SELANJUTNYA:
 
   1) Buka URL publik di atas di browser.
-     Set password admin saat first login.
+     Set password admin saat first login. (Default INITIAL_PASSWORD: 123456)
 
   2) Bikin API key 9router buat Hermes:
      Dashboard -> Settings -> API Keys -> "+ New Key"
      Copy key-nya (format: sk-xxxxxxxxxxxx).
 
   3) Tambah provider LLM (minimal 1, recommended 2+):
-     ${C_BOLD}bash add-provider.sh${C_RESET}
+     bash add-provider.sh
 
   4) Set Telegram bot token + 9router API key + install gateway service:
-     ${C_BOLD}bash configure-hermes.sh${C_RESET}
+     bash configure-hermes.sh
 
   5) Test bot di Telegram: kirim /start ke bot lo.
 
-${C_BOLD}STATUS / LOG:${C_RESET}
-  systemctl status 9router 9router-tunnel hermes-gateway
+STATUS / LOG:
+  docker ps                                  # 9router status
+  docker logs -f 9router                     # 9router log
+  systemctl status 9router-tunnel hermes-gateway
   journalctl -u hermes-gateway -f
 
 EOF

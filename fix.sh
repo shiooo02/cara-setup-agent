@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# fix.sh — repair install yang gagal di tengah jalan.
+# fix.sh - repair install yang gagal di tengah jalan.
 #
 # Pake ini kalau lo ngalamin salah satu dari ini:
-#   - 9router-tunnel restart loop (Main process exited code=killed status=9)
-#   - "Failed to start hermes-gateway.service: Unit not found"
+#   - 9router-tunnel restart loop / status=9/KILL
+#   - Container '9router' ga jalan / docker ga keinstall
+#   - 'Failed to start hermes-gateway.service: Unit not found'
 #   - tunnel-url.txt ga ada
-#   - hermes ga keinstall, atau install ga lengkap
-#   - bot ga respond karena config.yaml ga nunjuk ke 9router
+#   - Bot ga respond karena config.yaml ga nunjuk ke 9router
 #
 # Pakai:  sudo bash fix.sh
 #
@@ -18,15 +18,15 @@ require_root
 
 cat <<'BANNER'
 ================================================
-  Repair Tool - Hermes + 9Router + Tunnel
+  Repair Tool - Hermes + 9Router (docker) + Tunnel
 ================================================
 
 Tool ini bakal:
-  1) Stop & hapus service lama yang bermasalah
-  2) Pasang ulang tunnel pake --protocol http2 (anti restart-loop)
-  3) Install Hermes pake installer resmi (kalo belum ada)
-  4) Pasang ulang config.yaml + SOUL.md + .env template
-  5) Bikin tunnel-url.txt + verify dashboard jalan
+  1) Stop & hapus service legacy (npm 9router yg restart-loop)
+  2) Pasang ulang 9router via Docker (anti-OOM, anti-interactive-menu)
+  3) Pasang ulang tunnel pake --protocol http2
+  4) Install Hermes pake installer resmi (kalo belum ada)
+  5) Pasang ulang config.yaml + SOUL.md + .env template
 
 Aman buat dipake walaupun install.sh sebelumnya udah jalan (idempotent).
 
@@ -37,14 +37,14 @@ if ! confirm "Lanjut?"; then
   exit 0
 fi
 
-# ---------- 0. Pastikan ada swap (anti OOM-kill di VPS RAM kecil) ----------
+# ---------- 0. Pastikan ada swap ----------
 step "Cek memori (RAM + swap)"
-ensure_swap_available 3072 || warn "Memori kurang, install bisa OOM-kill. Lanjut anyway."
+ensure_swap_available 3072 || warn "Memori kurang, tetep lanjut."
 
-# ---------- 1. Bersihin service lama yang bermasalah ----------
-step "Bersihin systemd service lama (restart-loop / typo nama)"
+# ---------- 1. Bersihin systemd unit lama (npm-based, restart-loop) ----------
+step "Bersihin systemd unit lama"
 
-for svc in hermes hermes-gateway hermes-bot 9router-tunnel; do
+for svc in 9router 9router-tunnel hermes hermes-gateway hermes-bot; do
   if systemctl list-unit-files 2>/dev/null | grep -q "^${svc}.service"; then
     log "Stop & disable $svc"
     systemctl stop "$svc" 2>/dev/null || true
@@ -53,40 +53,48 @@ for svc in hermes hermes-gateway hermes-bot 9router-tunnel; do
   fi
 done
 
-rm -f /etc/systemd/system/hermes.service        # legacy
+rm -f /etc/systemd/system/9router.service       # legacy npm
 rm -f /etc/systemd/system/9router-tunnel.service
+rm -f /etc/systemd/system/hermes.service
 systemctl daemon-reload
+
+# Kill stray processes
+pkill -f '9router' 2>/dev/null || true
+pkill -f 'cloudflared.*tunnel' 2>/dev/null || true
+sleep 1
 ok "Service lama dibersihin"
 
-# ---------- 2. Pastikan 9router masih jalan ----------
-step "Cek 9Router"
-if ! systemctl is-active --quiet 9router; then
-  warn "9router ga aktif, coba restart"
-  systemctl restart 9router
-  sleep 3
-fi
+# ---------- 2. Pasang 9router via Docker ----------
+step "Pasang 9router via Docker (replace npm install)"
+bash "$SCRIPT_DIR/scripts/setup-9router.sh"
 
-if wait_for_9router 15; then
-  ok "9Router responsive di ${NINER_BASE}"
+if wait_for_9router 30; then
+  ok "9router responsive di ${NINER_BASE}"
 else
-  err "9Router ga nyahut. Cek: journalctl -u 9router -n 50"
+  err "9router ga nyahut. Cek: docker logs 9router"
+  docker logs 9router 2>&1 | tail -20
   exit 1
 fi
 
-# ---------- 3. Pasang ulang tunnel service (versi http2) ----------
-step "Pasang ulang 9router-tunnel (versi http2, anti restart-loop)"
+# ---------- 3. Pasang ulang tunnel ----------
+step "Pasang ulang 9router-tunnel"
 bash "$SCRIPT_DIR/scripts/setup-tunnel.sh"
+
+systemctl reset-failed 9router-tunnel 2>/dev/null || true
+systemctl restart 9router-tunnel
+sleep 8
+
+# Capture URL
+source "$SCRIPT_DIR/scripts/setup-tunnel.sh"
+capture_tunnel_url || warn "Tunnel URL belum keluar - rerun ' systemctl restart 9router-tunnel'"
 
 # ---------- 4. Install Hermes Agent ----------
 step "Install / verify Hermes Agent"
-
-# Pastiin PATH ke-pickup
 export PATH="/usr/local/bin:/root/.local/bin:$PATH"
 
 if command -v hermes >/dev/null 2>&1; then
   ok "Hermes udah keinstall: $(which hermes)"
 else
-  # Bersihin sisa npm install lama (legacy bug dari early version repo)
   if [[ -d "$HERMES_DIR/node_modules" ]]; then
     log "Bersihin sisa npm install lama di $HERMES_DIR"
     rm -rf "$HERMES_DIR/node_modules" "$HERMES_DIR/package.json" "$HERMES_DIR/package-lock.json"
@@ -117,13 +125,11 @@ if [[ ! -s "$HERMES_DIR/.env" ]] || ! grep -q TELEGRAM_BOT_TOKEN "$HERMES_DIR/.e
   ok ".env template dipasang"
 fi
 
-# config.yaml — INI YANG BIKIN BOT NYAMBUNG SAMA 9ROUTER
+# config.yaml - INI YANG BIKIN BOT NYAMBUNG SAMA 9ROUTER
 # Default config dari Hermes installer ngarahin ke OpenRouter, BUKAN 9router.
-# Replace selalu (kecuali user udah customize) supaya provider=custom +
-# base_url=9router jelas di-set.
 if [[ -f "$HERMES_DIR/config.yaml" ]]; then
   if ! grep -q 'localhost:20128' "$HERMES_DIR/config.yaml"; then
-    log "config.yaml ada tapi ga nunjuk ke 9router — backup & replace"
+    log "config.yaml ada tapi ga nunjuk ke 9router - backup & replace"
     cp "$HERMES_DIR/config.yaml" "$HERMES_DIR/config.yaml.bak.$(date +%s)"
     install -m 600 "$SCRIPT_DIR/templates/hermes-config.yaml.template" "$HERMES_DIR/config.yaml"
     ok "config.yaml di-replace (provider=custom, base_url=9router)"
@@ -147,25 +153,25 @@ TUNNEL_URL=""
 
 cat <<EOF
 
-${C_GREEN}================ FIX SELESAI ================${C_RESET}
+================ FIX SELESAI ================
 
-  9Router (lokal)   : ${NINER_BASE}
-  9Router (publik)  : ${TUNNEL_URL:-<belum tersedia, cek 'journalctl -u 9router-tunnel -n 30'>}
+  9Router (lokal)   : ${NINER_BASE} (via Docker container)
+  9Router (publik)  : ${TUNNEL_URL:-<belum tersedia, cek docker logs 9router>}
   Hermes binary     : $(command -v hermes 2>/dev/null || echo '<not found>')
   Hermes config     : $HERMES_DIR/config.yaml
   Hermes persona    : $HERMES_DIR/SOUL.md
 
-${C_BOLD}LANGKAH SELANJUTNYA:${C_RESET}
+LANGKAH SELANJUTNYA:
 
-  1) Buka URL publik di atas, set password admin (kalo belum)
+  1) Buka URL publik di atas, set password admin
   2) Bikin API key 9router (Settings > API Keys > New)
-  3) Tambah provider:
-     ${C_BOLD}bash add-provider.sh${C_RESET}
-  4) Set token Telegram + 9router key + install gateway service:
-     ${C_BOLD}bash configure-hermes.sh${C_RESET}
+  3) Tambah provider:        bash add-provider.sh
+  4) Set token + start bot:  bash configure-hermes.sh
 
-${C_BOLD}STATUS:${C_RESET}
-  systemctl status 9router 9router-tunnel
-  journalctl -u 9router-tunnel -n 20 --no-pager
+STATUS:
+  docker ps                                    # 9router (docker)
+  systemctl status 9router-tunnel hermes-gateway
+  docker logs -f 9router                       # log 9router
+  journalctl -u hermes-gateway -f              # log bot
 
 EOF
