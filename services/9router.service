@@ -7,22 +7,25 @@ Wants=network-online.target
 Type=simple
 User=root
 ExecStart=/usr/bin/9router
-Restart=always
-RestartSec=5
+# on-failure (bukan always) biar exit 0 ga nge-trigger restart
+Restart=on-failure
+RestartSec=15
+
+# --- Restart limit biar gak crash-loop infinite ---
+# Maks 5x restart dalam 10 menit, abis itu systemd kasih give-up.
+# Kalo terlampaui = pasti ada masalah real (bukan transient), reset-failed manual.
+StartLimitIntervalSec=600
+StartLimitBurst=5
 
 # --- Memory management (penting di VPS RAM kecil) ---
-# Biar OOM-killer bunuh service ini doang, bukan proses lain (kayak
-# bash installer). Pas first start, 9router compile better-sqlite3
-# yg butuh ~800MB sementara - kasih ruang sampe 1GB hard limit.
-# Setelah running normal, biasanya cuma ~150MB.
+# Pas first start, 9router compile better-sqlite3 yg bisa butuh ~800MB-1.5GB.
+# Naikin limit biar compile bisa finish.
 MemoryAccounting=yes
-MemoryHigh=800M
-MemoryMax=1024M
+MemoryHigh=1500M
+MemoryMax=1800M
 OOMScoreAdjust=300
 
 # --- Boot timeout ---
-# Kasih waktu 5 menit buat npm install better-sqlite3 compile pas
-# first start. Setelah ke-cache, restart cuma 1-2 detik.
 TimeoutStartSec=300
 
 StandardOutput=journal
